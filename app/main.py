@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Request
 import requests, os, sqlite3
 from dotenv import load_dotenv
-from app.database import *
-from app.ai_parser import *
+from database import *
+from ai_parser import *
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
