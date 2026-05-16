@@ -61,6 +61,12 @@ def process_message(user_id, text):
         lang = 'pidgin' if 'pidgin' in text else 'en'
         update_language(user_id, lang)
         return "Perfect! Just send your sales like: 'rice 5000 cash' or 'Sold perfume 15000'. I go track everything."
+    if 'reset' in text:
+        from database import conn
+        c = conn.cursor()
+        c.execute("DELETE FROM users WHERE phone=?", (user_id,))
+        conn.commit()
+        return "Reset done. Send hi to start again."
 
     # Delete
     if 'delete' in text or 'undo' in text:
