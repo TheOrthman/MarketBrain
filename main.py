@@ -24,11 +24,11 @@ async def startup():
     scheduler.add_job(send_daily_summary, 'cron', hour=21, minute=0)
 
 def send_whatsapp(to, message):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"  # fixed
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
     r = requests.post(url, headers=headers, json=data)
-    print(f"WHATSAPP SEND: {r.status_code} {r.text}")  # <-- add this
+    print(f"WHATSAPP SEND: {r.status_code} {r.text}")
 
 def get_ai_advice(prompt, language='en'):
     if not groq_client:
@@ -62,12 +62,13 @@ def process_message(user_id, text):
         update_language(user_id, lang)
         return "Perfect! Just send your sales like: 'rice 5000 cash' or 'Sold perfume 15000'. I go track everything."
     if 'reset' in text:
-        from database import conn
-        c = conn.cursor()
-        c.execute("DELETE FROM users WHERE phone=?", (user_id,))
-        conn.commit()
+        from database import get_conn
+        conn = get_conn(); c = conn.cursor()
+        c.execute("DELETE FROM users WHERE user_id=%s", (user_id,))
+        c.execute("DELETE FROM sales WHERE user_id=%s", (user_id,))
+        c.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
+        conn.commit(); conn.close()
         return "Reset done. Send hi to start again."
-
     # Delete
     if 'delete' in text or 'undo' in text:
         if delete_last_entry(user_id):
