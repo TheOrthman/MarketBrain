@@ -39,14 +39,14 @@ def update_language(uid, lang):
 
 def save_sale(uid, amount, product, pay):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO sales (user_id,amount,product,payment_method,timestamp) VALUES (%s,%s,%s)",
+    c.execute("INSERT INTO sales (user_id,amount,product,payment_method,timestamp) VALUES (%s,%s,%s,%s,%s)",
               (uid, amount, product, pay, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
 def save_expense(uid, amount, desc, typ):
     conn = get_conn(); c = conn.cursor()
     # CORRECT: 5 placeholders
-    c.execute("INSERT INTO expenses (user_id,amount,description,expense_type,timestamp) VALUES (%s,%s,%s)",
+    c.execute("INSERT INTO expenses (user_id,amount,description,expense_type,timestamp) VALUES (%s,%s,%s,%s,%s)",
               (uid, amount, desc, typ, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
