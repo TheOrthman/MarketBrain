@@ -84,12 +84,19 @@ def process_message(user_id, text):
         profit = sales - expenses - restock
         return f"{period.title()}: Sales ₦{sales:,}, Expenses ₦{expenses:,}, Restock ₦{restock:,}. Profit: ₦{profit:,}"
 
-    # Parse expenses/restock
+        # Parse expenses/restock
     expense_keywords = ['bought', 'spent', 'paid', 'fuel', 'transport', 'data', 'rent', 'stock', 'restock', 'inventory', 'buy']
     if any(k in text for k in expense_keywords):
-        amount_match = re.search(r'(\d+)\s*(k|thousand)?', text)
-        if amount_match:
-            amount = int(amount_match.group(1)) * 1000 if amount_match.group(2) else int(amount_match.group(1))
+        nums = re.findall(r'(\d+)\s*(k|thousand)?', text)
+        if nums:
+            # handle "5 shirts each 4000" or "5 x 4000"
+            if 'each' in text or 'x' in text and len(nums) >= 2:
+                q = int(nums[0][0]) * (1000 if nums[0][1] else 1)
+                p = int(nums[1][0]) * (1000 if nums[1][1] else 1)
+                amount = q * p
+            else:
+                amount = int(nums[0][0]) * 1000 if nums[0][1] else int(nums[0][0])
+
             expense_type = 'restock' if any(k in text for k in ['stock','restock','inventory','buy','bought']) else 'expense'
             save_expense(user_id, amount, text, expense_type)
             return f"Saved {expense_type} ₦{amount:,}. Well done!"
