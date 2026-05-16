@@ -24,7 +24,8 @@ def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
-    requests.post(url, headers=headers, json=data)
+    r = requests.post(url, headers=headers, json=data)
+    print(f"WHATSAPP SEND: {r.status_code} {r.text}")  # <-- add this
 
 def process_message(user_id, text):
     text = text.lower().strip()
