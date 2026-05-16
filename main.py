@@ -1,104 +1,135 @@
-import os, re, requests
 from fastapi import FastAPI, Request
+import requests
+import os
+import sqlite3
 from datetime import datetime
-import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
-from groq import Groq
-from database import *
 
 app = FastAPI()
-scheduler = BackgroundScheduler(timezone=pytz.timezone('Africa/Lagos'))
-GROQ_KEY = os.getenv("GROQ_API_KEY")
-groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+# --- CONFIG ---
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "marketbrain2026")
 
-@app.on_event("startup")
-async def startup():
-    init_db()
-    # scheduler.start()  # disabled for now
+# Load WhatsApp token (env, secret file, or hardcoded fallback)
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
+if len(WHATSAPP_TOKEN) < 100:
+    try:
+        with open("/etc/secrets/whatsapp_token", "r") as f:
+            WHATSAPP_TOKEN = f.read().strip()
+    except:
+        # Hardcoded permanent token (works for demo)
+        WHATSAPP_TOKEN = "EAAUnBKSsSJIBReab5jKx5cCpfLL2bBBtuaps8xxESOtZANMgBLZCKXo20S5b4WM3YhWnTL6Kkx4QqZCw1evkbI25wGH8sAeFrMAquK7jURb2qcTdoRVIcZArjhYKHRAkaJhBBh0QMSkpZBL1pTavQeR3SOYWfAqZAP2ZBfsUxxyNKxd0UIRx6FWZCjFMFhPJrgZDZD"
 
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1114871821711140")
+
+# --- DATABASE ---
+def init_db():
+    conn = sqlite3.connect("marketbrain.db")
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS stock (id INTEGER PRIMARY KEY, phone TEXT, item TEXT, qty INTEGER, cost REAL, date TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY, phone TEXT, item TEXT, qty INTEGER, price REAL, date TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# --- WHATSAPP SEND ---
 def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
+    data = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}}
     try:
         r = requests.post(url, headers=headers, json=data, timeout=10)
-        print(f"WHATSAPP_DEBUG TO={to} CODE={r.status_code} BODY={r.text}")
+        print(f"SEND TO {to} -> {r.status_code}")
     except Exception as e:
-        print(f"WHATSAPP_ERROR {e}")
+        print(f"ERROR: {e}")
 
-def process_message(user_id, text):
+# --- BUSINESS LOGIC ---
+def handle_message(phone, text):
     text = text.lower().strip()
-    user = get_user(user_id)
-    if not user:
-        create_user(user_id)
-        return "Welcome to MarketBrain! What's your business name?"
-    if not user['business_name']:
-        update_business_name(user_id, text.title())
-        return f"Nice! {text.title()} don enter. Pidgin or English?"
-    if not user['language']:
-        update_language(user_id, 'pidgin' if 'pidgin' in text else 'en')
-        return "Perfect! Send sales like 'sold 2 shirts 5000' or stock like 'stock 10 shirts 3000'"
+    conn = sqlite3.connect("marketbrain.db")
+    c = conn.cursor()
 
-    if text in ['stock', 'inventory'] or ('how many' in text and 'left' in text):
-        items = get_all_stock(user_id)
-        if not items: return "No stock yet. Add with 'stock 10 shirts 3000'"
-        return "\n".join([f"{r['product'].title()}: {r['quantity']} left" for r in items])
+    if text in ["hi", "hello", "menu"]:
+        return "🧠 MarketBrain\n\n1. stock [qty] [item] [cost] - Add stock\n2. sell [qty] [item] [price] - Record sale\n3. profit - Today's profit\n4. stock list - View inventory\n5. price [qty] [item] [cost] - Suggest price\n\nExample: stock 10 shirts 3000"
 
-    restock_match = re.search(r'(bought|buy|restock|stock)\s+(\d+)\s+([a-z0-9 ]+?)\s+(?:at\s+)?(\d+)\s*(k|thousand)?', text)
-    if restock_match:
-        qty = int(restock_match.group(2))
-        product = restock_match.group(3).strip()
-        unit = int(restock_match.group(4)) * 1000 if restock_match.group(5) else int(restock_match.group(4))
-        total = qty * unit
-        save_expense(user_id, total, f"{qty} {product}", 'restock')
-        add_stock(user_id, product, qty, unit)
-        current = get_stock(user_id, product)
-        return f"Added {qty} {product} @ ₦{unit:,}. You now have {current} {product}."
+    if text.startswith("stock ") and " " in text[6:]:
+        try:
+            parts = text.split()
+            qty = int(parts[1])
+            cost = float(parts[-1])
+            item = " ".join(parts[2:-1])
+            c.execute("INSERT INTO stock (phone, item, qty, cost, date) VALUES (?,?,?,?,?)",
+                     (phone, item, qty, cost, datetime.now().strftime("%Y-%m-%d")))
+            conn.commit()
+            return f"✅ Added {qty} {item} at ₦{cost:,.0f} each"
+        except:
+            return "Format: stock 10 shirts 3000"
 
-    sale_qty_match = re.search(r'(sold|sell)\s+(\d+)\s+([a-z0-9 ]+?)\s+(\d+)\s*(k|thousand)?', text)
-    if sale_qty_match:
-        qty = int(sale_qty_match.group(2))
-        product = sale_qty_match.group(3).strip()
-        price = int(sale_qty_match.group(4)) * 1000 if sale_qty_match.group(5) else int(sale_qty_match.group(4))
-        total = qty * price
-        payment = 'cash' if 'cash' in text else 'transfer' if 'transfer' in text else 'cash'
-        save_sale(user_id, total, product, payment, qty)
-        remaining = remove_stock(user_id, product, qty)
-        warn = f" ⚠️ Only {remaining} left! Restock soon." if remaining <= 5 else ""
-        return f"Sold {qty} {product} for ₦{total:,}. Stock left: {remaining}.{warn}"
+    if text.startswith("sell "):
+        try:
+            parts = text.split()
+            qty = int(parts[1])
+            price = float(parts[-1])
+            item = " ".join(parts[2:-1])
+            c.execute("INSERT INTO sales (phone, item, qty, price, date) VALUES (?,?,?,?,?)",
+                     (phone, item, qty, price, datetime.now().strftime("%Y-%m-%d")))
+            conn.commit()
+            return f"✅ Sold {qty} {item} at ₦{price:,.0f} each"
+        except:
+            return "Format: sell 5 shirts 5000"
 
-    if any(k in text for k in ['cash','transfer','pos']) and re.search(r'\d', text):
-        amt = re.search(r'(\d+)\s*(k|thousand)?', text)
-        if amt:
-            amount = int(amt.group(1)) * 1000 if amt.group(2) else int(amt.group(1))
-            product = text.replace(amt.group(0),'').replace('cash','').replace('transfer','').strip() or 'item'
-            save_sale(user_id, amount, product, 'cash', 1)
-            remove_stock(user_id, product, 1)
-            return f"₦{amount:,} saved!"
+    if text == "profit":
+        today = datetime.now().strftime("%Y-%m-%d")
+        c.execute("SELECT SUM(qty*price) FROM sales WHERE phone=? AND date=?", (phone, today))
+        revenue = c.fetchone()[0] or 0
+        c.execute("SELECT SUM(qty*cost) FROM stock WHERE phone=? AND date=?", (phone, today))
+        cost = c.fetchone()[0] or 0
+        profit = revenue - cost
+        return f"💰 Today: ₦{profit:,.0f} profit\nRevenue: ₦{revenue:,.0f}\nCost: ₦{cost:,.0f}"
 
-    if 'profit' in text or 'how much' in text:
-        sales = get_period_sales(user_id, 'today')
-        exp = get_period_expenses(user_id, 'today', 'expense')
-        rest = get_period_expenses(user_id, 'today', 'restock')
-        return f"Today: Sales ₦{sales:,}, Expenses ₦{exp:,}, Restock ₦{rest:,}. Profit ₦{sales-exp-rest:,}"
+    if text == "stock list":
+        c.execute("SELECT item, SUM(qty) FROM stock WHERE phone=? GROUP BY item", (phone,))
+        stocks = c.fetchall()
+        if not stocks: return "No stock yet"
+        return "📦 Stock:\n" + "\n".join([f"{item}: {qty}" for item, qty in stocks])
 
-    return "Got it. Send 'stock' to check inventory."
+    if text.startswith("price "):
+        try:
+            parts = text.split()
+            qty = int(parts[1])
+            cost = float(parts[-1])
+            item = " ".join(parts[2:-1])
+            suggested = cost * 1.4 # 40% markup
+            return f"💡 {item}:\nCost: ₦{cost:,.0f}\nSuggested sell: ₦{suggested:,.0f} (40% profit)\nFor {qty} units: ₦{suggested*qty:,.0f} total"
+        except:
+            return "Format: price 10 shirts 3000"
+
+    conn.close()
+    return "Type 'hi' for menu"
+
+# --- WEBHOOK ---
+@app.get("/")
+def home():
+    return {"status": "MarketBrain running"}
 
 @app.get("/webhook")
-async def verify(request: Request):
-    p = dict(request.query_params)
-    return int(p.get("hub.challenge")) if p.get("hub.verify_token") == VERIFY_TOKEN else "fail"
+def verify(request: Request):
+    params = dict(request.query_params)
+    if params.get("hub.verify_token") == VERIFY_TOKEN:
+        return int(params.get("hub.challenge", 0))
+    return "Invalid"
 
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
     try:
-        msg = data['entry'][0]['changes'][0]['value']['messages'][0]
-        resp = process_message(msg['from'], msg['text']['body'])
-        send_whatsapp(msg['from'], resp)
-    except: pass
-    return {"status":"ok"}
+        entry = data["entry"][0]["changes"][0]["value"]
+        if "messages" in entry:
+            msg = entry["messages"][0]
+            phone = msg["from"]
+            text = msg["text"]["body"]
+            reply = handle_message(phone, text)
+            send_whatsapp(phone, reply)
+    except Exception as e:
+        print(f"Webhook error: {e}")
+    return {"status": "ok"}
