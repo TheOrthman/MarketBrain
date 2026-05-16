@@ -10,18 +10,13 @@ app = FastAPI()
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Africa/Lagos'))
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# --- FIXED TOKEN LOADING ---
+# --- FIXED: Token won't truncate ---
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 if len(WHATSAPP_TOKEN) < 100:
-    try:
-        with open("/etc/secrets/whatsapp_token", "r") as f:
-            WHATSAPP_TOKEN = f.read().strip()
-    except:
-        WHATSAPP_TOKEN = "EAAUnBKSsSJIBReab5jKx5cCpfLL2bBBtuaps8xxESOtZANMgBLZCKXo20S5b4WM3YhWnTL6Kkx4QqZCw1evkbI25wGH8sAeFrMAquK7jURb2qcTdoRVIcZArjhYKHRAkaJhBBh0QMSkpZBL1pTavQeR3SOYWfAqZAP2ZBfsUxxyNKxd0UIRx6FWZCjFMFhPJrgZDZD"
+    WHATSAPP_TOKEN = "EAAUnBKSsSJIBReab5jKx5cCpfLL2bBBtuaps8xxESOtZANMgBLZCKXo20S5b4WM3YhWnTL6Kkx4QqZCw1evkbI25wGH8sAeFrMAquK7jURb2qcTdoRVIcZArjhYKHRAkaJhBBh0QMSkpZBL1pTavQeR3SOYWfAqZAP2ZBfsUxxyNKxd0UIRx6FWZCjFMFhPJrgZDZD"
 
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "1114871821711140")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "marketbrain2026")
-
 LAGOS = pytz.timezone('Africa/Lagos')
 
 @app.on_event("startup")
@@ -31,13 +26,13 @@ async def startup():
     scheduler.add_job(send_daily_summary, 'cron', hour=21, minute=0)
 
 def send_whatsapp(to, message):
-    # FIXED URL - removed double https
+    # FIXED: removed double https://
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
     try:
         r = requests.post(url, headers=headers, json=data, timeout=10)
-        print(f"WHATSAPP {to} -> {r.status_code}")
+        print(f"WHATSAPP {to} -> {r.status_code} {r.text[:100]}")
     except Exception as e:
         print(f"Send error: {e}")
 
@@ -71,13 +66,11 @@ def process_message(user_id, text):
         update_language(user_id, lang)
         return "Perfect! Just send your sales like: 'rice 5000 cash' or 'Sold perfume 15000'. I go track everything."
 
-    # Delete
     if 'delete' in text or 'undo' in text:
         if delete_last_entry(user_id):
             return "Don delete am."
         return "Nothing to delete."
 
-    # Reports
     if any(k in text for k in ['how much', 'profit', 'make money', 'sales']):
         period = 'today' if 'today' in text else 'yesterday' if 'yesterday' in text else 'week'
         sales = get_period_sales(user_id, period)
@@ -86,7 +79,6 @@ def process_message(user_id, text):
         profit = sales - expenses - restock
         return f"{period.title()}: Sales ₦{sales:,}, Expenses ₦{expenses:,}, Restock ₦{restock:,}. Profit: ₦{profit:,}"
 
-    # Parse expenses/restock
     expense_keywords = ['bought', 'spent', 'paid', 'fuel', 'transport', 'data', 'rent', 'stock', 'restock', 'inventory', 'buy']
     if any(k in text for k in expense_keywords):
         amount_match = re.search(r'(\d+)\s*(k|thousand)?', text)
@@ -96,7 +88,6 @@ def process_message(user_id, text):
             save_expense(user_id, amount, text, expense_type)
             return f"Saved {expense_type} ₦{amount:,}. Well done!"
 
-    # Parse sales
     sale_match = re.search(r'(\d+)\s*(k|thousand)?', text)
     payment = 'cash' if 'cash' in text else 'transfer' if 'transfer' in text else 'pos' if 'pos' in text else 'cash'
     is_sale_intent = any(k in text for k in ['sold', 'sell', 'sale']) or payment in text
@@ -109,7 +100,6 @@ def process_message(user_id, text):
         sales_today = get_period_sales(user_id, 'today')
         return f"₦{amount:,} saved! Today total: ₦{sales_today:,}. Keep am up!"
 
-    # AI fallback
     return get_ai_advice(text, user['language'])
 
 @app.get("/webhook")
@@ -135,5 +125,4 @@ async def webhook(request: Request):
     return {"status": "ok"}
 
 def send_daily_summary():
-    # placeholder for daily job
     pass
