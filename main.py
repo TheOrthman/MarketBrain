@@ -22,10 +22,10 @@ async def startup():
 
 def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
     r = requests.post(url, headers=headers, json=data)
-    print(f"WHATSAPP SEND: {r.status_code} {r.text}")  # <-- add this
+    print(f"TO:{to} STATUS:{r.status_code} RESP:{r.text[:200]}")
 
 def process_message(user_id, text):
     text = text.lower().strip()
