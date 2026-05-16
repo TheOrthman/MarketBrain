@@ -18,7 +18,7 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 @app.on_event("startup")
 async def startup():
     init_db()
-    scheduler.start()
+    # scheduler.start()  # disabled for now
 
 def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
