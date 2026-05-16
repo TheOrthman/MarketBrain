@@ -24,8 +24,11 @@ def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
-    r = requests.post(url, headers=headers, json=data)
-    print(f"TO:{to} STATUS:{r.status_code} RESP:{r.text[:200]}")
+    try:
+        r = requests.post(url, headers=headers, json=data, timeout=10)
+        print(f"WHATSAPP_DEBUG TO={to} CODE={r.status_code} BODY={r.text}")
+    except Exception as e:
+        print(f"WHATSAPP_ERROR {e}")
 
 def process_message(user_id, text):
     text = text.lower().strip()
