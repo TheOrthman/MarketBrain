@@ -38,40 +38,32 @@ def update_language(uid, lang):
 
 def save_sale(uid, amount, product, pay):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO sales (user_id,amount,product,payment_method,timestamp) VALUES (%s,%s,%s,%s,%s)", (uid, amount, product, pay, datetime.now(LAGOS)))
+    c.execute("INSERT INTO sales (user_id,amount,product,payment_method,timestamp) VALUES (%s,%s,%s,%s,%s)",
+              (uid, amount, product, pay, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
 def save_expense(uid, amount, desc, typ):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO expenses (user_id,amount,description,expense_type,timestamp) VALUES (%s,%s,%s,%s,%s)", (uid, amount, desc, typ, datetime.now(LAGOS)))
+    c.execute("INSERT INTO expenses (user_id,amount,description,expense_type,timestamp) VALUES (%s,%s,%s)",
+              (uid, amount, desc, typ, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
-def get_period_sales(uid, period, pay=None):
+def get_period_sales(uid, period):
     conn = get_conn(); c = conn.cursor(); now = datetime.now(LAGOS)
-    if period=='today': start = now.replace(hour=0,minute=0)
-    elif period=='yesterday': start = (now-timedelta(days=1)).replace(hour=0,minute=0); end = now.replace(hour=0,minute=0)
-    else: start = now-timedelta(days=7)
-    if period=='yesterday': q="SELECT COALESCE(SUM(amount),0) FROM sales WHERE user_id=%s AND timestamp>=%s AND timestamp<%s"; params=[uid,start,end]
-    else: q="SELECT COALESCE(SUM(amount),0) FROM sales WHERE user_id=%s AND timestamp>=%s"; params=[uid,start]
-    if pay: q+=" AND payment_method=%s"; params.append(pay)
-    c.execute(q, tuple(params)); val=c.fetchone()[0]; conn.close(); return val
+    start = now.replace(hour=0,minute=0,second=0) if period=='today' else (now-timedelta(days=1)).replace(hour=0,minute=0,second=0) if period=='yesterday' else now-timedelta(days=7)
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM sales WHERE user_id=%s AND timestamp>=%s", (uid, start))
+    val = c.fetchone()[0]; conn.close(); return val
 
 def get_period_expenses(uid, period, typ):
-    conn = get_conn(); c = conn.cursor(); now=datetime.now(LAGOS)
-    if period=='today': start=now.replace(hour=0,minute=0)
-    elif period=='yesterday': start=(now-timedelta(days=1)).replace(hour=0,minute=0); end=now.replace(hour=0,minute=0)
-    else: start=now-timedelta(days=7)
-    if period=='yesterday': c.execute("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE user_id=%s AND expense_type=%s AND timestamp>=%s AND timestamp<%s",(uid,typ,start,end))
-    else: c.execute("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE user_id=%s AND expense_type=%s AND timestamp>=%s",(uid,typ,start))
-    val=c.fetchone()[0]; conn.close(); return val
+    conn = get_conn(); c = conn.cursor(); now = datetime.now(LAGOS)
+    start = now.replace(hour=0,minute=0,second=0) if period=='today' else (now-timedelta(days=1)).replace(hour=0,minute=0,second=0) if period=='yesterday' else now-timedelta(days=7)
+    c.execute("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE user_id=%s AND expense_type=%s AND timestamp>=%s", (uid, typ, start))
+    val = c.fetchone()[0]; conn.close(); return val
 
-def get_best_product(uid, period):
-    conn=get_conn(); c=conn.cursor(); start=datetime.now(LAGOS)-timedelta(days=7)
-    c.execute("SELECT product, SUM(amount) FROM sales WHERE user_id=%s AND timestamp>=%s GROUP BY product ORDER BY SUM(amount) DESC LIMIT 1",(uid,start))
-    row=c.fetchone(); conn.close(); return row[0] if row else 'none'
-
+def get_best_product(uid, period): return 'none'
 def delete_last_entry(uid):
-    conn=get_conn(); c=conn.cursor()
-    c.execute("DELETE FROM sales WHERE id IN (SELECT id FROM sales WHERE user_id=%s ORDER BY timestamp DESC LIMIT 1)",(uid,))
-    if c.rowcount==0: c.execute("DELETE FROM expenses WHERE id IN (SELECT id FROM expenses WHERE user_id=%s ORDER BY timestamp DESC LIMIT 1)",(uid,))
-    conn.commit(); conn.close(); return c.rowcount>0
+    conn = get_conn(); c = conn.cursor()
+    c.execute("DELETE FROM sales WHERE id IN (SELECT id FROM sales WHERE user_id=%s ORDER BY timestamp DESC LIMIT 1)", (uid,))
+    if c.rowcount == 0:
+        c.execute("DELETE FROM expenses WHERE id IN (SELECT id FROM expenses WHERE user_id=%s ORDER BY timestamp DESC LIMIT 1)", (uid,))
+    conn.commit(); conn.close(); return c.rowcount > 0
