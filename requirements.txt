@@ -7,3 +7,4 @@ pytz==2024.1
 openai==1.30.0
 groq==0.9.0
 psycopg2-binary==2.9.9
+httpx==0.25.2
