@@ -24,7 +24,8 @@ async def startup():
     scheduler.add_job(send_daily_summary, 'cron', hour=21, minute=0)
 
 def send_whatsapp(to, message):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"  # fixed
+    # FIXED URL
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "text": {"body": message}}
     r = requests.post(url, headers=headers, json=data)
@@ -45,8 +46,13 @@ def get_ai_advice(prompt, language='en'):
     except:
         return "I don save am. Anything else?"
 
+def extract_amount(text):
+    m = re.search(r'(\d+)\s*(k|thousand)?', text)
+    if not m: return 0
+    return int(m.group(1)) * 1000 if m.group(2) else int(m.group(1))
+
 def process_message(user_id, text):
-    text = text.lower().strip()
+    text_lower = text.lower().strip()
     user = get_user(user_id)
 
     if not user:
@@ -58,10 +64,11 @@ def process_message(user_id, text):
         return f"Nice! {text.title()} don enter. You wan make I dey speak Pidgin or English?"
 
     if not user['language']:
-        lang = 'pidgin' if 'pidgin' in text else 'en'
+        lang = 'pidgin' if 'pidgin' in text_lower else 'en'
         update_language(user_id, lang)
-        return "Perfect! Just send your sales like: 'rice 5000 cash' or 'Sold perfume 15000'. I go track everything."
-    if 'reset' in text:
+        return "Perfect! Just send your sales like: 'sold 5 shirts each 7000' or 'rice 5000 cash'. I go track everything."
+
+    if 'reset' in text_lower:
         from database import get_conn
         conn = get_conn(); c = conn.cursor()
         c.execute("DELETE FROM users WHERE user_id=%s", (user_id,))
@@ -69,52 +76,65 @@ def process_message(user_id, text):
         c.execute("DELETE FROM expenses WHERE user_id=%s", (user_id,))
         conn.commit(); conn.close()
         return "Reset done. Send hi to start again."
-    # Delete
-    if 'delete' in text or 'undo' in text:
+
+    if 'delete' in text_lower or 'undo' in text_lower:
         if delete_last_entry(user_id):
             return "Don delete am."
         return "Nothing to delete."
 
     # Reports
-    if any(k in text for k in ['how much', 'profit', 'make money', 'sales']):
-        period = 'today' if 'today' in text else 'yesterday' if 'yesterday' in text else 'week'
+    if any(k in text_lower for k in ['how much', 'profit', 'make money', 'sales']):
+        period = 'today' if 'today' in text_lower else 'yesterday' if 'yesterday' in text_lower else 'week'
         sales = get_period_sales(user_id, period)
         expenses = get_period_expenses(user_id, period, 'expense')
         restock = get_period_expenses(user_id, period, 'restock')
         profit = sales - expenses - restock
         return f"{period.title()}: Sales ₦{sales:,}, Expenses ₦{expenses:,}, Restock ₦{restock:,}. Profit: ₦{profit:,}"
 
-        # Parse expenses/restock
+    # Expenses / Restock
     expense_keywords = ['bought', 'spent', 'paid', 'fuel', 'transport', 'data', 'rent', 'stock', 'restock', 'inventory', 'buy']
-    if any(k in text for k in expense_keywords):
-        nums = re.findall(r'(\d+)\s*(k|thousand)?', text)
+    if any(k in text_lower for k in expense_keywords):
+        nums = re.findall(r'(\d+)\s*(k|thousand)?', text_lower)
         if nums:
-            # handle "5 shirts each 4000" or "5 x 4000"
-            if 'each' in text or 'x' in text and len(nums) >= 2:
+            if ('each' in text_lower or 'x' in text_lower) and len(nums) >= 2:
                 q = int(nums[0][0]) * (1000 if nums[0][1] else 1)
                 p = int(nums[1][0]) * (1000 if nums[1][1] else 1)
                 amount = q * p
             else:
                 amount = int(nums[0][0]) * 1000 if nums[0][1] else int(nums[0][0])
-
-            expense_type = 'restock' if any(k in text for k in ['stock','restock','inventory','buy','bought']) else 'expense'
+            expense_type = 'restock' if any(k in text_lower for k in ['stock','restock','inventory','buy','bought']) else 'expense'
             save_expense(user_id, amount, text, expense_type)
             return f"Saved {expense_type} ₦{amount:,}. Well done!"
 
-    # Parse sales - NOW INCLUDES 'SOLD'
-    sale_match = re.search(r'(\d+)\s*(k|thousand)?', text)
-    payment = 'cash' if 'cash' in text else 'transfer' if 'transfer' in text else 'pos' if 'pos' in text else 'cash'
-    is_sale_intent = any(k in text for k in ['sold', 'sell', 'sale']) or payment in text
+    # SALES - NEW BULK SUPPORT
+    is_sale = any(k in text_lower for k in ['sold', 'sell', 'sale']) or any(p in text_lower for p in ['cash','transfer','pos'])
+    if is_sale and not any(k in text_lower for k in expense_keywords):
+        nums = re.findall(r'(\d+)\s*(k|thousand)?', text_lower)
+        amount = 0
+        product = 'item'
 
-    if sale_match and is_sale_intent and not any(k in text for k in expense_keywords):
-        amount = int(sale_match.group(1)) * 1000 if sale_match.group(2) else int(sale_match.group(1))
-        product = text.replace(str(sale_match.group(1)), '').replace('k','').replace('sold','').replace('sell','').replace(payment,'').strip()
-        product = product if product else 'item'
-        save_sale(user_id, amount, product, payment)
-        sales_today = get_period_sales(user_id, 'today')
-        return f"₦{amount:,} saved! Today total: ₦{sales_today:,}. Keep am up!"
+        # "sold 5 shirts each 7000"
+        if ('each' in text_lower or 'x' in text_lower) and len(nums) >= 2:
+            qty = int(nums[0][0]) * (1000 if nums[0][1] else 1)
+            price = int(nums[1][0]) * (1000 if nums[1][1] else 1)
+            amount = qty * price
+            # find product name between qty and each
+            m = re.search(r'\d+\s+(\w+)', text_lower)
+            if m: product = m.group(1)
+        elif nums:
+            amount = int(nums[0][0]) * 1000 if nums[0][1] else int(nums[0][0])
+            for w in ['shirt','shirts','oud','perfume','dress','shoe','bag','rice']:
+                if w in text_lower: product = w; break
 
-    # AI fallback
+        payment = 'cash'
+        if 'transfer' in text_lower: payment = 'transfer'
+        elif 'pos' in text_lower: payment = 'pos'
+
+        if amount > 0:
+            save_sale(user_id, amount, product, payment)
+            total = get_period_sales(user_id, 'today')
+            return f"₦{amount:,} saved! Today total: ₦{total:,}. Keep am up!"
+
     return get_ai_advice(text, user['language'])
 
 @app.get("/webhook")
@@ -140,5 +160,4 @@ async def webhook(request: Request):
     return {"status": "ok"}
 
 def send_daily_summary():
-    # placeholder for daily job
     pass
