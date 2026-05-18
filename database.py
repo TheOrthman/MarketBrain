@@ -24,7 +24,7 @@ def get_user(uid):
 
 def create_user(uid):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO users VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", (uid, None, None, datetime.now(LAGOS)))
+    c.execute("INSERT INTO users (user_id, business_name, language, created_at) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", (uid, None, None, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
 def update_business_name(uid, name):
@@ -37,23 +37,28 @@ def update_language(uid, lang):
 
 def save_sale(uid, amount, product, qty, pay):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO sales VALUES (DEFAULT,%s,%s,%s,%s)", (uid, amount, product, qty, pay, datetime.now(LAGOS)))
-    # deduct stock
-    c.execute("UPDATE inventory SET quantity = quantity - %s, last_updated=%s WHERE user_id=%s AND product=%s", (qty, datetime.now(LAGOS), uid, product))
+    c.execute("INSERT INTO sales (user_id, amount, product, quantity, payment_method, timestamp) VALUES (%s,%s,%s,%s)",
+              (uid, amount, product, qty, pay, datetime.now(LAGOS)))
+    c.execute("UPDATE inventory SET quantity = quantity - %s, last_updated=%s WHERE user_id=%s AND product=%s",
+              (qty, datetime.now(LAGOS), uid, product))
     conn.commit(); conn.close()
 
 def save_expense(uid, amount, desc, typ):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO expenses VALUES (DEFAULT,%s,%s,%s)", (uid, amount, desc, typ, datetime.now(LAGOS)))
+    c.execute("INSERT INTO expenses (user_id, amount, description, expense_type, timestamp) VALUES (%s,%s,%s,%s,%s)",
+              (uid, amount, desc, typ, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
 def add_stock(uid, product, qty, cost):
     conn = get_conn(); c = conn.cursor()
-    c.execute("""INSERT INTO inventory (user_id,product,quantity,cost_price,last_updated)
-                 VALUES (%s,%s,%s)
-                 ON CONFLICT (user_id,product)
-                 DO UPDATE SET quantity = inventory.quantity + %s, cost_price=%s, last_updated=%s""",
-              (uid, product, qty, cost, datetime.now(LAGOS), qty, cost, datetime.now(LAGOS)))
+    now = datetime.now(LAGOS)
+    c.execute("""INSERT INTO inventory (user_id, product, quantity, cost_price, last_updated)
+                 VALUES (%s,%s,%s,%s,%s)
+                 ON CONFLICT (user_id, product)
+                 DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                               cost_price = EXCLUDED.cost_price,
+                               last_updated = EXCLUDED.last_updated""",
+              (uid, product, qty, cost, now))
     conn.commit(); conn.close()
 
 def get_stock(uid):
@@ -64,17 +69,17 @@ def get_stock(uid):
 
 def get_period_sales(uid, period):
     conn = get_conn(); c = conn.cursor(); now = datetime.now(LAGOS)
-    start = now.replace(hour=0,minute=0) if period=='today' else now-timedelta(days=7)
+    start = now.replace(hour=0,minute=0,second=0,microsecond=0) if period=='today' else now-timedelta(days=7)
     c.execute("SELECT COALESCE(SUM(amount),0) FROM sales WHERE user_id=%s AND timestamp>=%s", (uid, start))
-    return c.fetchone()[0]
+    val = c.fetchone()[0]; conn.close(); return val
 
 def get_period_expenses(uid, period, typ):
     conn = get_conn(); c = conn.cursor(); now = datetime.now(LAGOS)
-    start = now.replace(hour=0,minute=0) if period=='today' else now-timedelta(days=7)
+    start = now.replace(hour=0,minute=0,second=0,microsecond=0) if period=='today' else now-timedelta(days=7)
     c.execute("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE user_id=%s AND expense_type=%s AND timestamp>=%s", (uid, typ, start))
-    return c.fetchone()[0]
+    val = c.fetchone()[0]; conn.close(); return val
 
 def delete_last_entry(uid):
     conn = get_conn(); c = conn.cursor()
     c.execute("DELETE FROM sales WHERE id IN (SELECT id FROM sales WHERE user_id=%s ORDER BY timestamp DESC LIMIT 1)", (uid,))
-    conn.commit(); conn.close(); return c.rowcount>0
+    deleted = c.rowcount; conn.commit(); conn.close(); return deleted>0
