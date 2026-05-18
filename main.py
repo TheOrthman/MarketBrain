@@ -54,18 +54,11 @@ def transcribe_audio(media_id):
     try:
         headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
         meta = requests.get(f"https://graph.facebook.com/v19.0/{media_id}", headers=headers).json()
-        url = meta.get('url')
-        audio_bytes = requests.get(url, headers=headers).content
-        resp = groq_client.audio.transcriptions.create(
-            file=("voice.ogg", audio_bytes),
-            model="whisper-large-v3",
-            language="en",
-            temperature=0
-        )
+        audio_bytes = requests.get(meta['url'], headers=headers).content
+        resp = groq_client.audio.transcriptions.create(file=("voice.ogg", audio_bytes), model="whisper-large-v3")
         return resp.text
     except Exception as e:
-        print("Transcribe error:", e)
-        return ""
+        print("Transcribe:", e); return ""
 
 def extract_amount(t):
     m=re.search(r'(\d+)\s*(k|thousand)?',t); return int(m.group(1))*(1000 if m.group(2) else 1) if m else 0
@@ -78,39 +71,32 @@ def process_message(uid, text, mode):
     if 'reset' in tl:
         conn=get_conn();c=conn.cursor()
         for tbl in ['users','sales','expenses','inventory']: c.execute(f"DELETE FROM {tbl} WHERE user_id=%s",(uid,))
-        conn.commit();conn.close();create_user(uid); return t("Reset done! Wetin be your business name?","Reset done! What's your business name?")
+        conn.commit();conn.close();create_user(uid); return t("Reset! Business name?","Reset done! What's your business name?")
 
     if not user: create_user(uid); return "Welcome! What's your business name?"
-    if not user['business_name']: update_business_name(uid,text.title()); return t(f"Nice {text.title()}! Pidgin or English?", f"Nice {text.title()}! Reply Pidgin or English")
-    if not user['language']:
-        update_language(uid,'pidgin' if 'pidgin' in tl else 'en')
-        send_menu(uid)
-        return t("You set! Tap button below.","You're all set! Tap a button below.")
+    if not user['business_name']: update_business_name(uid,text.title()); return "__ASK_LANG__"
+    if not user['language']: update_language(uid,'pidgin' if 'pidgin' in tl else 'en'); return "__SHOW_MENU__"
 
-    if re.match(r'\d{4}-\d{2}', tl):
-        d=tl; conn=get_conn();c=conn.cursor(); c.execute("SELECT COALESCE(SUM(amount),0) FROM sales WHERE user_id=%s AND DATE(timestamp)=%s",(uid,d)); s=c.fetchone()[0]; conn.close(); return f"Sales {d}: ₦{s:,}"
-
-    if mode=='restock' or 'bought' in tl or 'buy' in tl:
+    if mode=='restock' or 'bought' in tl:
         nums=re.findall(r'(\d+)\s*(k|thousand)?',tl)
-        if len(nums)>=2 and ('each' in tl or 'x' in tl):
-            q=int(nums[0][0]); p=int(nums[1][0])*(1000 if nums[1][1] else 1); a=q*p
+        if len(nums)>=2:
+            q=int(nums[0][0]); p=int(nums[1][0])*(1000 if nums[1][1] else 1)
             prod=re.search(r'\d+\s+(\w+)',tl); prod=prod.group(1) if prod else 'item'
-            add_stock(uid,prod,q,p); save_expense(uid,a,text,'restock')
-            return t(f"Added {q} {prod}. Now: {dict(get_stock(uid)).get(prod,0)}", f"Added {q} {prod}. Stock: {dict(get_stock(uid)).get(prod,0)}")
+            add_stock(uid,prod,q,p); save_expense(uid,q*p,text,'restock')
+            return t(f"Added {q} {prod}","Added {q} {prod}".format(q=q,prod=prod))
 
-    if mode=='sale' or 'sold' in tl or 'sell' in tl:
+    if mode=='sale' or 'sold' in tl:
         nums=re.findall(r'(\d+)\s*(k|thousand)?',tl); q,p=1,0
-        if len(nums)>=2 and ('each' in tl or 'x' in tl): q=int(nums[0][0]); p=int(nums[1][0])*(1000 if nums[1][1] else 1)
+        if len(nums)>=2: q=int(nums[0][0]); p=int(nums[1][0])*(1000 if nums[1][1] else 1)
         elif nums: p=int(nums[0][0])*(1000 if nums[0][1] else 1)
         a=q*p; prod=re.search(r'\d+\s+(\w+)',tl); prod=prod.group(1) if prod else 'item'
-        pay='transfer' if 'transfer' in tl else 'pos' if 'pos' in tl else 'cash'
-        if a>0: save_sale(uid,a,prod,q,pay); return t(f"Sold {q} {prod} ₦{a:,}. Remain: {dict(get_stock(uid)).get(prod,0)}", f"Sold {q} {prod} for ₦{a:,}. Left: {dict(get_stock(uid)).get(prod,0)}")
+        if a>0: save_sale(uid,a,prod,q,'cash'); return t(f"Sold {q} {prod} ₦{a:,}","Sold {q} {prod} for ₦{a:,}".format(q=q,prod=prod,a=a))
 
     if mode=='expense' or (re.search(r'\d',tl) and 'sold' not in tl):
         a=extract_amount(tl)
-        if a>0: save_expense(uid,a,text,'expense'); return t(f"Expense ₦{a:,} saved", f"Expense ₦{a:,} saved")
+        if a>0: save_expense(uid,a,text,'expense'); return f"Expense ₦{a:,}"
 
-    return t("Use menu buttons","Use the menu buttons")
+    return t("Use buttons","Use menu")
 
 @app.get("/webhook")
 async def verify(r:Request):
@@ -130,26 +116,27 @@ async def webhook(r:Request):
                 send_whatsapp(uid, f"You talk: '{text}'" if lang=='pidgin' else f"You said: '{text}'")
                 resp = process_message(uid, text, user_modes.get(uid))
                 send_whatsapp(uid, resp)
-            else:
-                send_whatsapp(uid, "I no hear am, try again" if lang=='pidgin' else "Didn't catch that, try again")
             send_menu(uid); return {"status":"ok"}
 
         if msg.get('type')=='interactive':
             bid=msg['interactive'].get('button_reply',{}).get('id') or msg['interactive'].get('list_reply',{}).get('id')
             user_modes[uid]=bid
-            if bid in ['sale','restock','expense']: send_whatsapp(uid, "Send details or voice note" if lang=='en' else "Send details or voice")
+            if bid in ['sale','restock','expense']: send_whatsapp(uid, "Send text or voice" if lang=='en' else "Send text or voice")
             elif bid=='reports': send_report_menu(uid)
-            elif bid=='today': s=get_period_sales(uid,'today'); r=get_period_expenses(uid,'today','restock'); e=get_period_expenses(uid,'today','expense'); send_whatsapp(uid,f"TODAY\nSales ₦{s:,}\nProfit ₦{s-r-e:,}")
-            elif bid=='week': s=get_period_sales(uid,'week'); send_whatsapp(uid,f"Week: ₦{s:,}")
-            elif bid=='stock': st=get_stock(uid); txt="\n".join([f"{p}: {q}" for p,q in st]) if st else "Empty"; send_whatsapp(uid,f"Stock:\n{txt}")
-            elif bid=='sales': conn=get_conn();c=conn.cursor();c.execute("SELECT product,quantity,amount FROM sales WHERE user_id=%s ORDER BY timestamp DESC LIMIT 5",(uid,)); rows=c.fetchall();conn.close(); txt="\n".join([f"{q}x {p} - ₦{a:,}" for p,q,a in rows]) or "None"; send_whatsapp(uid,f"Last:\n{txt}")
-            elif bid=='profit': s=get_period_sales(uid,'week'); r=get_period_expenses(uid,'week','restock'); send_whatsapp(uid,f"Profit: ₦{s-r:,}")
+            elif bid=='today': s=get_period_sales(uid,'today'); send_whatsapp(uid,f"Today ₦{s:,}")
+            elif bid=='stock': st=get_stock(uid); txt="\n".join([f"{p}:{q}" for p,q in st]) or "Empty"; send_whatsapp(uid,txt)
             return {"status":"ok"}
 
         if msg.get('type')=='text':
             text=msg['text']['body']
-            if text.lower() in ['hi','menu']: send_menu(uid)
-            else: resp=process_message(uid,text,user_modes.get(uid)); send_whatsapp(uid,resp);
-            if 'business name' not in resp.lower() and 'pidgin or english' not in resp.lower(): send_menu(uid)
-    except Exception as e: print("Error:",e)
+            if text.lower() in ['hi','menu']: send_menu(uid); return {"status":"ok"}
+            resp = process_message(uid,text,user_modes.get(uid))
+            if resp=="__ASK_LANG__":
+                send_whatsapp(uid, f"Nice {text.title()}! Reply Pidgin or English")
+            elif resp=="__SHOW_MENU__":
+                send_whatsapp(uid, "You're set!" if lang=='en' else "You set!")
+                send_menu(uid)
+            else:
+                send_whatsapp(uid, resp); send_menu(uid)
+    except Exception as e: print(e)
     return {"status":"ok"}
