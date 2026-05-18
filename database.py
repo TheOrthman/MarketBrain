@@ -41,10 +41,14 @@ def update_language(uid, lang):
 
 def save_sale(uid, amount, product, qty, pay):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO sales (user_id, amount, product, quantity, payment_method, timestamp) VALUES (%s,%s,%s,%s)",
-              (uid, amount, product, qty, pay, datetime.now(LAGOS)))
-    c.execute("UPDATE inventory SET quantity = quantity - %s, last_updated=%s WHERE user_id=%s AND product=%s",
-              (qty, datetime.now(LAGOS), uid, product))
+    c.execute(
+        "INSERT INTO sales (user_id, amount, product, quantity, payment_method, timestamp) VALUES (%s, %s, %s, %s, %s, %s)",
+        (uid, amount, product, qty, pay, datetime.now(LAGOS))
+    )
+    c.execute(
+        "UPDATE inventory SET quantity = quantity - %s, last_updated=%s WHERE user_id=%s AND product=%s",
+        (qty, datetime.now(LAGOS), uid, product)
+    )
     conn.commit(); conn.close()
 
 def save_expense(uid, amount, desc, typ):
