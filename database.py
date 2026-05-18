@@ -13,7 +13,10 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, business_name TEXT, language TEXT, created_at TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS sales (id SERIAL PRIMARY KEY, user_id TEXT, amount INTEGER, product TEXT, quantity INTEGER, payment_method TEXT, timestamp TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS expenses (id SERIAL PRIMARY KEY, user_id TEXT, amount INTEGER, description TEXT, expense_type TEXT, timestamp TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS inventory (id SERIAL PRIMARY KEY, user_id TEXT, product TEXT, quantity INTEGER, cost_price INTEGER, last_updated TIMESTAMP, UNIQUE(user_id, product))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS inventory (id SERIAL PRIMARY KEY, user_id TEXT, product TEXT, quantity INTEGER, cost_price INTEGER, UNIQUE(user_id, product))''')
+    # Fix old tables
+    c.execute("ALTER TABLE inventory ADD COLUMN IF NOT EXISTS last_updated TIMESTAMP")
+    c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP")
     conn.commit(); conn.close()
 
 def get_user(uid):
@@ -24,7 +27,8 @@ def get_user(uid):
 
 def create_user(uid):
     conn = get_conn(); c = conn.cursor()
-    c.execute("INSERT INTO users (user_id, business_name, language, created_at) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING", (uid, None, None, datetime.now(LAGOS)))
+    c.execute("INSERT INTO users (user_id, business_name, language, created_at) VALUES (%s,%s,%s,%s) ON CONFLICT (user_id) DO NOTHING",
+              (uid, None, None, datetime.now(LAGOS)))
     conn.commit(); conn.close()
 
 def update_business_name(uid, name):
