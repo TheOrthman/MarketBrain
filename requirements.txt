@@ -7,8 +7,8 @@ apscheduler==3.10.4
 pytz==2024.1
 requests==2.31.0
 openai==1.30.0
-numpy==1.26.4
-opencv-python==4.9.0.80
-easyocr==1.7.1
-torch==2.2.2
-torchvision==0.17.2
+numpy<2
+opencv-python-headless
+easyocr
+torch
+torchvision
