@@ -1,9 +1,10 @@
-import os, re, requests, traceback
+import os, re, requests, traceback, cv2
 from fastapi import FastAPI, Request
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from groq import Groq
 from database import *
+from paddleocr import PaddleOCR
 
 app = FastAPI()
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Africa/Lagos'))
@@ -12,6 +13,9 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 user_modes = {}
+
+# OCR init once
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
 @app.on_event("startup")
 async def startup():
@@ -26,7 +30,7 @@ def send_whatsapp(to, msg):
     print(f"SEND {r.status_code} {r.text[:100]}")
 
 def send_menu(to):
-    send_whatsapp(to, "MarketBrain:\n1 💰 Sale\n2 📦 Stock\n3 💸 Expense\n4 📊 Reports\n\nReply number")
+    send_whatsapp(to, "MarketBrain:\n1 💰 Sale\n2 📦 Stock\n3 💸 Expense\n4 📊 Reports\n5 📷 Scan sales\n\nReply number")
 
 def transcribe_audio(media_id):
     try:
@@ -44,14 +48,48 @@ def transcribe_audio(media_id):
         traceback.print_exc()
         return ""
 
+def download_media(media_id):
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    meta = requests.get(f"https://graph.facebook.com/v19.0/{media_id}", headers=headers).json()
+    url = meta.get('url')
+    data = requests.get(url, headers=headers).content
+    path = f"/tmp/{media_id}.jpg"
+    with open(path, 'wb') as f: f.write(data)
+    return path
+
+def preprocess_image(path):
+    img = cv2.imread(path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+    out = f"{path}_p.jpg"
+    cv2.imwrite(out, enhanced)
+    return out
+
+def extract_sales_from_image(path):
+    proc = preprocess_image(path)
+    result = ocr.ocr(proc, cls=True)
+    lines = []
+    for line in result[0]:
+        txt = line[1][0].strip().lower()
+        if len(txt) > 2:
+            lines.append(txt)
+    sales = []
+    for l in lines:
+        m = re.search(r'([a-z]+)\s*x?(\d+)\s*(\d+)', l)
+        if m:
+            item, qty, price = m.groups()
+            sales.append({"item":item, "qty":int(qty), "price":int(price), "total":int(qty)*int(price), "raw":l})
+    return sales
+
 def extract_amount(t):
     m = re.search(r'(\d+)\s*(k|thousand)?', t, re.I)
     return int(m.group(1)) * (1000 if m.group(2) else 1) if m else 0
 
 def process_message(uid, text, mode):
+    # your existing function unchanged
     user = get_user(uid)
     tl = text.lower()
-
     if 'reset' in tl:
         conn = get_conn(); c = conn.cursor()
         for tbl in ['sales', 'expenses', 'inventory', 'users']:
@@ -59,21 +97,16 @@ def process_message(uid, text, mode):
         conn.commit(); conn.close()
         create_user(uid)
         return "RESET"
-
     if not user:
         create_user(uid)
         return "Welcome! What's your business name?"
-
     if not user['business_name']:
         update_business_name(uid, text.title())
         return "__ASK_LANG__"
-
     if not user['language']:
         lang = 'pidgin' if 'pidgin' in tl else 'en'
         update_language(uid, lang)
         return "__SHOW_MENU__"
-
-    # REPORTS
     if mode == '4' or 'report' in tl:
         sales_today = get_period_sales(uid, 'today')
         sales_week = get_period_sales(uid, 'week')
@@ -83,7 +116,6 @@ def process_message(uid, text, mode):
         stock_txt = "\n".join([f"• {p}: {q}" for p, q in stock[:5]]) if stock else "No stock recorded"
         profit = sales_today - exp_restock
         return f"📊 TODAY'S REPORT\n\n💰 Sales: ₦{sales_today:,}\n💸 Expenses: ₦{exp_today:,}\n📦 Restock: ₦{exp_restock:,}\n📈 Profit: ₦{profit:,}\n\nWeek Sales: ₦{sales_week:,}\n\nSTOCK:\n{stock_txt}"
-
     if mode == '2' or 'bought' in tl or 'restock' in tl:
         nums = re.findall(r'(\d+)', tl)
         if len(nums) >= 2:
@@ -92,7 +124,6 @@ def process_message(uid, text, mode):
             save_expense(uid, q * p, text, 'restock')
             return f"✅ Added {q} items (₦{p:,} each)"
         return "Send: quantity price (e.g. '20 5k')"
-
     if mode == '1' or 'sold' in tl or 'sale' in tl:
         nums = re.findall(r'(\d+)', tl)
         a = int(nums[0]) * 1000 if nums else extract_amount(tl)
@@ -100,14 +131,12 @@ def process_message(uid, text, mode):
             save_sale(uid, a, 'item', 1, 'cash')
             return f"✅ Sale ₦{a:,} saved"
         return "Send amount (e.g. '15k')"
-
     if mode == '3' or 'expense' in tl or 'spent' in tl:
         a = extract_amount(tl)
         if a:
             save_expense(uid, a, text, 'expense')
             return f"✅ Expense ₦{a:,} saved"
         return "Send amount (e.g. 'transport 2k')"
-
     return "Saved. Choose from menu."
 
 @app.get("/webhook")
@@ -122,12 +151,29 @@ async def webhook(r: Request):
     try:
         data = await r.json()
         value = data['entry'][0]['changes'][0]['value']
-
         if 'messages' not in value:
             return {"status": "ok"}
-
         msg = value['messages'][0]
         uid = msg['from']
+
+        if msg.get('type') == 'image':
+            send_whatsapp(uid, "📷 Scanning your sales...")
+            path = download_media(msg['image']['id'])
+            sales = extract_sales_from_image(path)
+            if sales:
+                total = sum(s['total'] for s in sales)
+                txt = f"I see {len(sales)} sales:\n"
+                for i,s in enumerate(sales,1):
+                    txt += f"{i}. {s['item'].title()} x{s['qty']} = ₦{s['total']:,}\n"
+                txt += f"\nTotal: ₦{total:,}\nReply 1 to save all"
+                user_modes[uid] = 'scan_pending'
+                # store temporarily
+                app.state.scan_cache = getattr(app.state, 'scan_cache', {})
+                app.state.scan_cache[uid] = sales
+                send_whatsapp(uid, txt)
+            else:
+                send_whatsapp(uid, "Couldn't read it. Try brighter light, one item per line.")
+            return {"status":"ok"}
 
         if msg.get('type') == 'audio':
             send_whatsapp(uid, "🎤 Listening...")
@@ -144,18 +190,30 @@ async def webhook(r: Request):
         if msg.get('type') == 'text':
             text = msg['text']['body'].strip()
 
-            if text in ['1', '2', '3', '4']:
+            # handle scan confirmation
+            if user_modes.get(uid) == 'scan_pending' and text == '1':
+                sales = app.state.scan_cache.get(uid, [])
+                for s in sales:
+                    save_sale(uid, s['total'], s['item'], s['qty'], 'cash')
+                user_modes[uid] = None
+                send_whatsapp(uid, f"✅ Saved {len(sales)} sales!")
+                send_menu(uid)
+                return {"status":"ok"}
+
+            if text in ['1','2','3','4','5']:
                 user_modes[uid] = text
                 if text == '4':
                     resp = process_message(uid, 'report', '4')
                     send_whatsapp(uid, resp)
                     send_menu(uid)
+                elif text == '5':
+                    send_whatsapp(uid, "Send a clear photo of your sales book. Write one per line like 'Peak 2 1500'")
                 else:
-                    names = {'1': 'Sale', '2': 'Stock', '3': 'Expense'}
-                    send_whatsapp(uid, f"{names[text]} mode. Send details (e.g. '15k' or '20 5k')")
+                    names = {'1':'Sale','2':'Stock','3':'Expense'}
+                    send_whatsapp(uid, f"{names[text]} mode. Send details")
                 return {"status": "ok"}
 
-            if text.lower() in ['hi', 'hello', 'menu', 'start']:
+            if text.lower() in ['hi','hello','menu','start']:
                 send_menu(uid)
                 return {"status": "ok"}
 
@@ -169,9 +227,8 @@ async def webhook(r: Request):
                 send_menu(uid)
             else:
                 send_whatsapp(uid, resp)
-                if user_modes.get(uid)!= '4':
+                if user_modes.get(uid) not in ['4','scan_pending']:
                     send_menu(uid)
-
     except Exception as e:
         print("ERR", e)
         traceback.print_exc()
