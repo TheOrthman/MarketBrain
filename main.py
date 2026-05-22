@@ -4,7 +4,6 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from groq import Groq
 from database import *
-from paddleocr import PaddleOCR
 
 app = FastAPI()
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Africa/Lagos'))
@@ -14,8 +13,7 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 user_modes = {}
 
-# OCR init once
-ocr = PaddleOCR(use_angle_cls=True, lang='en')
+
 
 @app.on_event("startup")
 async def startup():
