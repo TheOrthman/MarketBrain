@@ -1,0 +1,125 @@
+# ocr_handler.py
+import os
+import cv2
+import requests
+from paddleocr import PaddleOCR
+
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+
+# Initialize OCR once — downloads models on first run
+ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+
+def download_whatsapp_media(media_id: str) -> str:
+    """
+    Download image from WhatsApp Cloud API
+    Returns local file path
+    """
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    meta_url = f"https://graph.facebook.com/v19.0/{media_id}"
+    meta = requests.get(meta_url, headers=headers).json()
+
+    media_url = meta.get('url')
+    if not media_url:
+        raise Exception("No media URL from Meta")
+
+    data = requests.get(media_url, headers=headers).content
+    path = f"/tmp/{media_id}.jpg"
+    with open(path, 'wb') as f:
+        f.write(data)
+    return path
+
+def preprocess_image(path: str) -> str:
+    """
+    Enhance image for better OCR: grayscale + contrast
+    """
+    img = cv2.imread(path)
+    if img is None:
+        return path
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # CLAHE for low-light market photos
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+
+    out_path = f"{path}_proc.jpg"
+    cv2.imwrite(out_path, enhanced)
+    return out_path
+
+def extract_text_lines(image_path: str) -> list:
+    """
+    Run OCR and return list of text lines
+    """
+    proc_path = preprocess_image(image_path)
+    result = ocr.ocr(proc_path, cls=True)
+
+    lines = []
+    if not result or not result[0]:
+        return lines
+
+    for line in result[0]:
+        text = line[1][0].strip()
+        confidence = line[1][1]
+        # Keep only confident reads
+        if confidence > 0.5 and len(text) > 1:
+            lines.append(text.lower())
+
+    return lines
+
+def parse_sales_from_ocr(lines: list) -> list:
+    """
+    Convert OCR lines into sales dicts
+    Uses same regex as your ai_parser for consistency
+    Example: "peak 2 1500" or "peak x2 1500"
+    """
+    import re
+    sales = []
+    for raw in lines:
+        # clean common OCR mistakes
+        clean = raw.replace('o', '0').replace('l', '1') if raw.replace(' ','').isdigit() else raw
+
+        m = re.search(r'([a-z]{2,})\s*x?\s*(\d+)\s+(\d{3,5})', clean)
+        if m:
+            item, qty, price = m.groups()
+            try:
+                qty = int(qty)
+                price = int(price)
+                # handle shorthand like 15 = 1500
+                if price < 100:
+                    price *= 100
+                sales.append({
+                    "item": item,
+                    "qty": qty,
+                    "price": price,
+                    "total": qty * price,
+                    "raw": raw
+                })
+            except:
+                continue
+    return sales
+
+def process_image_for_sales(media_id: str) -> dict:
+    """
+    Full pipeline: download -> OCR -> parse
+    Returns: {"lines": [...], "sales": [...], "total": int}
+    """
+    try:
+        path = download_whatsapp_media(media_id)
+        lines = extract_text_lines(path)
+        sales = parse_sales_from_ocr(lines)
+        total = sum(s['total'] for s in sales)
+        return {
+            "success": True,
+            "lines": lines,
+            "sales": sales,
+            "total": total,
+            "count": len(sales)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "lines": [],
+            "sales": [],
+            "total": 0,
+            "count": 0
+        }
